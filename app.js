@@ -4,7 +4,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.0';
+  const VERSION = '1.1';
   const STORE_KEY = 'bobologie-direction.v1';
   // Cadenas officiel de la structure. Une fois renseigné, un mot de passe qui ne
   // donne pas ce cadenas est refusé (protège des fautes de frappe).
@@ -27,12 +27,17 @@
   ];
 
   const ICON = {
+    journal: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4.5" width="14" height="16.5" rx="3"/><path d="M9 3h6v3H9zM8.5 11.5h7M8.5 15.5h4.5"/></svg>',
+    kids: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.6-3.2 2.7-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="17" cy="9.5" r="2.4"/><path d="M16.8 14.6c2 .3 3.3 1.8 3.7 4.4"/></svg>',
+    right: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>',
     pin: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12v17l-6-4-6 4z"/></svg>',
     settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>',
     paste: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4.5" width="14" height="16.5" rx="3"/><path d="M9 3h6v3H9zM12 10v7M8.5 13.5 12 17l3.5-3.5"/></svg>',
   };
   const TABS = [
     { id: 'follow', label: 'Suivis', icon: ICON.pin },
+    { id: 'journal', label: 'Journal', icon: ICON.journal },
+    { id: 'children', label: 'Enfants', icon: ICON.kids },
     { id: 'settings', label: 'Réglages', icon: ICON.settings },
   ];
 
@@ -43,9 +48,14 @@
   const plural = (n, word) => `${n} ${word}${n > 1 ? 's' : ''}`;
   const str = (v) => (typeof v === 'string' ? v : '');
   const arr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : []);
+  const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
   const isTime = (v) => /^\d{2}:\d{2}$/.test(v || '');
   const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
   const fmtTime = (hm) => (isTime(hm) ? hm.replace(':', 'h') : '—');
+  function fmtLong(iso) {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  }
   function fmtShort(iso) {
     const [y, m, d] = iso.split('-').map(Number);
     return new Date(y, m - 1, d).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
@@ -128,19 +138,27 @@
   }
 
   /* ---------- Données ---------- */
+  function splitName(name) {
+    const parts = String(name || 'Enfant').trim().split(/\s+/);
+    return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+  }
   function normalize(d) {
     d = d && typeof d === 'object' ? d : {};
     const k = d.key && typeof d.key === 'object' && str(d.key.d) && str(d.key.x) && str(d.key.y) ? { d: d.key.d, x: d.key.x, y: d.key.y } : null;
     const items = (Array.isArray(d.items) ? d.items : []).filter((e) => e && e.id && isDate(e.date)).map((e) => ({
       id: String(e.id), date: e.date, time: isTime(e.time) ? e.time : '00:00',
-      name: str(e.name) || 'Enfant', group: str(e.group), animator: str(e.animator), structure: str(e.structure),
+      name: str(e.name) || 'Enfant', childKey: str(e.childKey) || norm(e.name), group: str(e.group), animator: str(e.animator), structure: str(e.structure),
       types: arr(e.types), zones: arr(e.zones), details: str(e.details),
       cares: (Array.isArray(e.cares) ? e.cares : []).filter((c) => Array.isArray(c)).map((c) => [str(c[0]), str(c[1])]),
       flags: arr(e.flags).filter((f) => FLAGS[f]), by: str(e.by),
       done: Object.fromEntries(FOLLOW.map((f) => [f.key, !!(e.done && e.done[f.key])])),
       receivedAt: +e.receivedAt || 0,
     }));
-    return { key: k, items, installAsked: !!d.installAsked };
+    const children = (Array.isArray(d.children) ? d.children : []).filter((c) => c && str(c.key) && str(c.firstName))
+      .map((c) => ({ key: c.key, firstName: c.firstName, lastName: str(c.lastName), group: str(c.group), notes: str(c.notes) }));
+    // Suivis reçus avant l'onglet Enfants : on recrée les fiches à partir des noms.
+    items.forEach((e) => { if (!children.some((c) => c.key === e.childKey)) children.push(Object.assign({ key: e.childKey, group: e.group, notes: '' }, splitName(e.name))); });
+    return { key: k, items, children, installAsked: !!d.installAsked };
   }
   function load() {
     try { return normalize(JSON.parse(localStorage.getItem(STORE_KEY) || '{}')); } catch (e) { return normalize({}); }
@@ -150,7 +168,7 @@
   }
 
   let db = load();
-  const ui = { tab: 'follow', all: false };
+  const ui = { tab: 'follow', all: false, childQuery: '' };
   let pendingHash = '';      // lien reçu avant la saisie du mot de passe
   let installPrompt = null;
 
@@ -158,6 +176,23 @@
     return db.items
       .filter((e) => e.flags.includes(key) && (all || !e.done[key]))
       .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  }
+  function childName(c) { return [c.firstName, c.lastName].filter(Boolean).join(' '); }
+  function itemsOf(key) { return db.items.filter((e) => e.childKey === key).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time)); }
+  function hue(text) { let h = 0; for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; }
+  function avatar(c) {
+    const ini = ((c.firstName || '?')[0] + ((c.lastName || '')[0] || '')).toUpperCase();
+    return `<span class="avatar" style="--h:${hue(childName(c))}" aria-hidden="true">${esc(ini)}</span>`;
+  }
+  /* Crée ou complète la fiche d'un enfant à partir d'un bobo reçu. Deux animateurs qui
+     envoient le même enfant (même prénom et nom) alimentent la même fiche. */
+  function upsertChild(first, last, group, notes) {
+    const key = norm(`${first} ${last}`);
+    let c = db.children.find((x) => x.key === key);
+    if (!c) { c = { key, firstName: first, lastName: last, group: '', notes: '' }; db.children.push(c); }
+    if (group) c.group = group;
+    if (notes) c.notes = notes;
+    return key;
   }
   function pendingCount() { return FOLLOW.reduce((n, f) => n + followItems(f.key, false).length, 0); }
 
@@ -175,9 +210,13 @@
       p.e.forEach((e) => {
         if (!e || !e.i) return;
         const flags = arr(e.f).filter((f) => FLAGS[f]);
+        // Les liens récents donnent prénom et nom séparés ; les anciens, seulement « Hugo R. ».
+        const who = str(e.p) ? { firstName: str(e.p).trim(), lastName: str(e.l).trim() } : splitName(str(e.n));
+        const childKey = upsertChild(who.firstName, who.lastName, str(e.g), str(e.o));
         const data = {
           id: String(e.i), date: p.d, time: isTime(e.t) ? e.t : '00:00',
-          name: str(e.n) || 'Enfant', group: str(e.g), animator: str(p.a), structure: str(p.s),
+          // Nom tel qu'il est écrit sur la fiche, même si un autre animateur l'a saisi autrement.
+          name: childName(db.children.find((c) => c.key === childKey)), childKey, group: str(e.g), animator: str(p.a), structure: str(p.s),
           types: arr(e.y), zones: arr(e.z), details: str(e.x),
           cares: (Array.isArray(e.c) ? e.c : []).filter((c) => Array.isArray(c)).map((c) => [str(c[0]), str(c[1])]),
           flags, by: str(e.b),
@@ -237,10 +276,93 @@
     if (ui.tab === 'follow') {
       view.innerHTML = followHTML();
       bar.innerHTML = `<button type="button" class="btn primary grow" data-action="paste">${ICON.paste}Coller les messages</button>`;
+    } else if (ui.tab === 'journal') {
+      view.innerHTML = journalHTML();
+      bar.innerHTML = '';
+    } else if (ui.tab === 'children') {
+      view.innerHTML = childrenHTML();
+      bar.innerHTML = '';
     } else {
       view.innerHTML = settingsHTML();
       bar.innerHTML = '';
     }
+  }
+
+  function flagsHTML(e, skip) {
+    return e.flags.filter((k) => k !== skip).map((k) => {
+      const fo = FOLLOW.find((f) => f.key === k);
+      return `<span class="flag">${FLAGS[k].emoji} ${FLAGS[k].label}${fo && e.done[k] ? ' ✓' : ''}</span>`;
+    }).join('');
+  }
+
+  function journalHTML() {
+    if (!db.items.length) {
+      return `<header class="masthead"><h1>Journal</h1></header>
+        <div class="empty">${ICON.journal}<h2>Journal vide</h2><p>Les bobos reçus des animateurs s’affichent ici, jour par jour.</p></div>`;
+    }
+    const days = [...new Set(db.items.map((e) => e.date))].sort().reverse();
+    return `<header class="masthead"><h1>Journal</h1><span class="brand-sub">${plural(db.items.length, 'bobo')} reçu${db.items.length > 1 ? 's' : ''}</span></header>
+      <p class="hint" style="margin-bottom:4px">Seuls les bobos avec un suivi sont envoyés à la direction.</p>
+      ${days.map((d) => {
+        const list = db.items.filter((e) => e.date === d).sort((a, b) => a.time.localeCompare(b.time));
+        return `<h2 class="group-title">${esc(fmtLong(d))} · ${list.length}</h2>
+          <ol class="timeline">${list.map((e) => `<li class="entry">
+            <time class="entry-time" datetime="${e.time}">${fmtTime(e.time)}</time>
+            <button type="button" class="card entry-card" data-action="child-open" data-key="${esc(e.childKey)}">
+              <span class="entry-head"><span class="entry-name">${esc(e.name)}</span>${e.group ? `<span class="tag">${esc(e.group)}</span>` : ''}</span>
+              <span class="entry-what">${esc(e.types.join(' · ') || 'Bobo')}${e.zones.length ? ` <span class="muted">— ${esc(e.zones.join(', ').toLowerCase())}</span>` : ''}</span>
+              ${e.details ? `<span class="entry-details">${esc(e.details)}</span>` : ''}
+              ${e.cares.map((c) => `<span class="care-line"><span class="care-badge">${fmtTime(c[0])}</span><span>${esc(c[1])}</span></span>`).join('')}
+              <span class="flags">${flagsHTML(e)}</span>
+              ${e.animator || e.by ? `<span class="entry-by">${e.by ? `Soigné par ${esc(e.by)}` : ''}${e.by && e.animator ? ' · ' : ''}${e.animator ? `envoyé par ${esc(e.animator)}` : ''}</span>` : ''}
+            </button>
+          </li>`).join('')}</ol>`;
+      }).join('')}`;
+  }
+
+  function childrenHTML() {
+    if (!db.children.length) {
+      return `<header class="masthead"><h1>Enfants</h1></header>
+        <div class="empty">${ICON.kids}<h2>Aucun enfant</h2><p>Les fiches se créent toutes seules quand vous recevez un suivi : prénom, nom, groupe et infos utiles.</p></div>`;
+    }
+    return `<header class="masthead"><h1>Enfants</h1><span class="brand-sub">${plural(db.children.length, 'enfant')}</span></header>
+      <div class="search"><input type="search" id="child-q" placeholder="Rechercher un enfant ou un groupe" value="${esc(ui.childQuery)}" aria-label="Rechercher" autocomplete="off"></div>
+      <div id="child-list">${childListHTML()}</div>`;
+  }
+  function childListHTML() {
+    const q = norm(ui.childQuery);
+    const list = [...db.children].sort((a, b) => childName(a).localeCompare(childName(b), 'fr', { sensitivity: 'base' }))
+      .filter((c) => !q || norm(`${childName(c)} ${c.group}`).includes(q));
+    if (!list.length) return '<p class="hint center">Aucun enfant ne correspond à cette recherche.</p>';
+    const byGroup = new Map();
+    list.forEach((c) => { if (!byGroup.has(c.group)) byGroup.set(c.group, []); byGroup.get(c.group).push(c); });
+    const names = [...byGroup.keys()].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b, 'fr', { numeric: true }));
+    const titles = names.length > 1 || names[0] !== '';
+    return names.map((g) => `${titles ? `<h2 class="group-title">${esc(g || 'Sans groupe')}</h2>` : ''}
+      <div class="card rows">${byGroup.get(g).map((c) => {
+        const all = itemsOf(c.key);
+        const todo = all.filter((e) => FOLLOW.some((f) => e.flags.includes(f.key) && !e.done[f.key])).length;
+        return `<button type="button" class="row" data-action="child-open" data-key="${esc(c.key)}">
+          ${avatar(c)}
+          <span class="row-main"><strong>${esc(childName(c))}</strong><span>${plural(all.length, 'bobo')}${todo ? ` · ${todo} à traiter` : ''}${c.notes ? ' · ⚠️ infos' : ''}</span></span>
+          ${ICON.right}
+        </button>`;
+      }).join('')}</div>`).join('');
+  }
+  function openChildSheet(key) {
+    const c = db.children.find((x) => x.key === key);
+    if (!c) return;
+    const hist = itemsOf(key);
+    openSheet('Fiche enfant', `
+      <div class="card picked">${avatar(c)}<div class="picked-main"><strong>${esc(childName(c))}</strong>${c.group ? `<span>${esc(c.group)}</span>` : ''}</div></div>
+      ${c.notes ? `<p class="alert" style="margin-top:0">⚠️ ${esc(c.notes)}</p>` : ''}
+      <section><h3>Historique<small>${plural(hist.length, 'bobo')}</small></h3>
+        ${hist.length ? `<ul class="history">${hist.map((e) => `<li><b>${esc(fmtShort(e.date))} · ${fmtTime(e.time)}</b><br>${esc(e.types.join(', ') || 'Bobo')}${e.zones.length ? ` — ${esc(e.zones.join(', ').toLowerCase())}` : ''}
+          ${e.details ? `<br><span class="muted">${esc(e.details)}</span>` : ''}
+          ${e.cares.length ? `<br><span class="muted">Soins : ${esc(e.cares.map((k) => `${fmtTime(k[0])} ${k[1]}`).join(' ; '))}</span>` : ''}
+          <br><span class="flags" style="margin-top:6px">${flagsHTML(e)}</span></li>`).join('')}</ul>` : '<p class="hint">Aucun bobo reçu pour cet enfant.</p>'}
+      </section>
+      <button type="button" class="btn danger block" data-action="child-delete" data-key="${esc(c.key)}">Supprimer cette fiche</button>`);
   }
 
   function setupHTML() {
@@ -263,12 +385,13 @@
       return `<h2 class="group-title">${f.title} · ${list.length}</h2>
         <div class="follow-list">${list.map((e) => {
           const isDone = e.done[f.key];
-          const others = e.flags.filter((k) => k !== f.key).map((k) => `<span class="flag">${FLAGS[k].emoji} ${FLAGS[k].label}</span>`).join('');
+          const others = flagsHTML(e, f.key);
           return `<article class="card follow${isDone ? ' is-done' : ''}">
             <div class="entry-head"><span class="entry-name">${esc(e.name)}</span>${e.group ? `<span class="tag">${esc(e.group)}</span>` : ''}</div>
             <p class="follow-when">${esc(fmtShort(e.date))} à ${fmtTime(e.time)}${e.animator ? ` · envoyé par ${esc(e.animator)}` : ''}</p>
             <p class="entry-what">${esc(e.types.join(' · ') || 'Bobo')}${e.zones.length ? ` <span class="muted">— ${esc(e.zones.join(', ').toLowerCase())}</span>` : ''}</p>
             ${e.details ? `<p class="entry-details">${esc(e.details)}</p>` : ''}
+            ${(db.children.find((c) => c.key === e.childKey) || {}).notes ? `<p class="alert" style="margin-top:0">⚠️ ${esc(db.children.find((c) => c.key === e.childKey).notes)}</p>` : ''}
             ${e.cares.map((c) => `<p class="care-line"><span class="care-badge">${fmtTime(c[0])}</span><span>${esc(c[1])}</span></p>`).join('')}
             ${others ? `<p class="flags">${others}</p>` : ''}
             <div class="follow-actions">
@@ -318,6 +441,19 @@
   }
 
   /* ---------- Feuille, confirmation, toast ---------- */
+  function openSheet(title, body) {
+    closeSheet();
+    const el = document.createElement('div');
+    el.className = 'sheet';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-label', title);
+    el.innerHTML = `<div class="sheet-inner">
+      <header class="sheet-head"><button type="button" data-action="sheet-close">Fermer</button><h2>${esc(title)}</h2><span></span></header>
+      <div class="sheet-body">${body}</div>
+    </div>`;
+    $('#sheets').appendChild(el);
+  }
   function openPasteSheet() {
     const el = document.createElement('div');
     el.className = 'sheet';
@@ -468,6 +604,19 @@
       reportImport(r);
     },
     'sheet-close'() { closeSheet(); },
+    'child-open'(el) { openChildSheet(el.dataset.key); },
+    async 'child-delete'(el) {
+      const c = db.children.find((x) => x.key === el.dataset.key);
+      if (!c) return;
+      const n = itemsOf(c.key).length;
+      const ok = await confirmDialog({ title: `Supprimer la fiche de ${c.firstName} ?`, text: n ? `Sa fiche et ses ${plural(n, 'bobo')} reçu${n > 1 ? 's' : ''} seront effacés de ce téléphone.` : 'Sa fiche sera effacée de ce téléphone.', ok: 'Supprimer', danger: true });
+      if (!ok) return;
+      db.items = db.items.filter((e) => e.childKey !== c.key);
+      db.children = db.children.filter((x) => x.key !== c.key);
+      save();
+      closeSheet();
+      render();
+    },
     done(el) {
       const e = db.items.find((x) => x.id === el.dataset.id);
       if (!e) return;
@@ -478,7 +627,7 @@
     async remove(el) {
       const e = db.items.find((x) => x.id === el.dataset.id);
       if (!e) return;
-      const ok = await confirmDialog({ title: `Supprimer le suivi de ${e.name} ?`, text: 'Il disparaît de toutes les rubriques de ce téléphone.', ok: 'Supprimer', danger: true });
+      const ok = await confirmDialog({ title: `Supprimer le suivi de ${e.name} ?`, text: 'Il disparaît aussi du journal. La fiche de l’enfant est conservée.', ok: 'Supprimer', danger: true });
       if (!ok) return;
       db.items = db.items.filter((x) => x.id !== e.id);
       save();
@@ -497,7 +646,7 @@
     },
     'install-ask'() { openInstallDialog(); },
     async purge() {
-      const ok = await confirmDialog({ title: 'Supprimer les suivis terminés ?', text: 'Seuls les suivis entièrement traités sont supprimés.', ok: 'Supprimer', danger: true });
+      const ok = await confirmDialog({ title: 'Supprimer les suivis terminés ?', text: 'Les bobos entièrement traités sont retirés des suivis et du journal. Les fiches enfants sont conservées.', ok: 'Supprimer', danger: true });
       if (!ok) return;
       db.items = db.items.filter((e) => !FOLLOW.every((f) => !e.flags.includes(f.key) || e.done[f.key]));
       save();
@@ -511,7 +660,7 @@
       render();
     },
     async wipe() {
-      const ok = await confirmDialog({ title: 'Tout effacer ?', text: `${plural(db.items.length, 'suivi')} et le mot de passe seront supprimés de ce téléphone.`, ok: 'Tout effacer', danger: true });
+      const ok = await confirmDialog({ title: 'Tout effacer ?', text: `${plural(db.items.length, 'suivi')}, ${plural(db.children.length, 'fiche')} enfant et le mot de passe seront supprimés de ce téléphone.`, ok: 'Tout effacer', danger: true });
       if (!ok) return;
       db = normalize({ installAsked: true });
       save();
@@ -524,6 +673,9 @@
     if (!el || el.disabled) return;
     const fn = actions[el.dataset.action];
     if (fn) fn(el, ev);
+  });
+  document.addEventListener('input', (ev) => {
+    if (ev.target.id === 'child-q') { ui.childQuery = ev.target.value; $('#child-list').innerHTML = childListHTML(); }
   });
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && ev.target.id === 'pw') { ev.preventDefault(); actions.unlock($('[data-action="unlock"]')); }

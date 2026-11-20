@@ -4,11 +4,11 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.1';
+  const VERSION = '1.2';
   const STORE_KEY = 'bobologie-direction.v1';
   // Cadenas officiel de la structure. Une fois renseigné, un mot de passe qui ne
   // donne pas ce cadenas est refusé (protège des fautes de frappe).
-  const EXPECTED_PUB = '';
+  const EXPECTED_PUB = 'TlIrkMzEx8_Cbqxc4AHlGubn3KPFsHdQS2GWLiADmVnDUX9rDZ77JxBlHzGdL3ErHFl69qtd3KdoQquIv64AcQ';
   const PBKDF2_ROUNDS = 250000;
   const PBKDF2_SALT = 'bobologie-direction/v1';
   const HKDF_INFO = 'bobologie-direction/v1';

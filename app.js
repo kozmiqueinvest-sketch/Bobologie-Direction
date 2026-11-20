@@ -4,7 +4,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.2';
+  const VERSION = '1.3';
   const STORE_KEY = 'bobologie-direction.v1';
   // Cadenas officiel de la structure. Une fois renseigné, un mot de passe qui ne
   // donne pas ce cadenas est refusé (protège des fautes de frappe).
@@ -168,6 +168,10 @@
   }
 
   let db = load();
+  // Téléphone ouvert avec un mot de passe qui ne correspond pas au cadenas officiel
+  // (saisi avant que le cadenas soit fixé) : il ne pourrait lire aucun lien. On le redemande.
+  let keyMismatch = false;
+  if (EXPECTED_PUB && db.key && pubOf(db.key) !== EXPECTED_PUB) { db.key = null; keyMismatch = true; save(); }
   const ui = { tab: 'follow', all: false, childQuery: '' };
   let pendingHash = '';      // lien reçu avant la saisie du mot de passe
   let installPrompt = null;
@@ -198,14 +202,22 @@
 
   /* Importe tous les liens direction trouvés dans un texte (un ou plusieurs messages). */
   async function importText(text) {
-    const codes = [...new Set([...String(text || '').matchAll(/#e=([A-Za-z0-9_-]{100,})/g)].map((m) => m[1]))];
-    if (!codes.length) return { links: 0, added: 0, updated: 0, failed: 0 };
+    // Un lien = le contenu chiffré, suivi (liens récents) du début du cadenas utilisé.
+    const found = new Map();
+    [...String(text || '').matchAll(/#e=([A-Za-z0-9_-]{100,})(?:\.([A-Za-z0-9_-]{6}))?/g)].forEach((m) => found.set(m[1], m[2] || ''));
+    const codes = [...found.keys()];
+    const mine = pubOf(db.key).slice(0, 6);
+    let otherKey = 0;
+    if (!codes.length) return { links: 0, added: 0, updated: 0, failed: 0, otherKey: 0 };
     let added = 0;
     let updated = 0;
     let failed = 0;
     for (const code of codes) {
       let p;
-      try { p = await decryptLink(code, db.key); } catch (e) { failed += 1; continue; }
+      try { p = await decryptLink(code, db.key); } catch (e) {
+        if (found.get(code) && found.get(code) !== mine) otherKey += 1; else failed += 1;
+        continue;
+      }
       if (!p || !Array.isArray(p.e) || !isDate(p.d)) { failed += 1; continue; }
       p.e.forEach((e) => {
         if (!e || !e.i) return;
@@ -233,14 +245,15 @@
       });
     }
     save();
-    return { links: codes.length, added, updated, failed };
+    return { links: codes.length, added, updated, failed, otherKey };
   }
   function reportImport(r) {
     if (!r.links) { toast('Aucun lien direction dans ce texte'); return; }
     const parts = [];
     if (r.added) parts.push(`${plural(r.added, 'suivi')} ajouté${r.added > 1 ? 's' : ''}`);
     if (r.updated) parts.push(`${r.updated} déjà reçu${r.updated > 1 ? 's' : ''}`);
-    if (r.failed) parts.push(`${plural(r.failed, 'lien')} illisible${r.failed > 1 ? 's' : ''} avec ce mot de passe`);
+    if (r.otherKey) parts.push(`${plural(r.otherKey, 'lien')} verrouillé${r.otherKey > 1 ? 's' : ''} avec un autre cadenas : l’appli de l’animateur doit être mise à jour`);
+    if (r.failed) parts.push(`${plural(r.failed, 'lien')} illisible${r.failed > 1 ? 's' : ''} : lien incomplet, ou envoyé avant la mise à jour de l’appli animateur`);
     toast(parts.join(' · ') || 'Rien de nouveau');
   }
 
@@ -370,6 +383,7 @@
       <img src="icons/icon-192.png" alt="" width="72" height="72">
       <h1>Espace direction</h1>
       <p class="hint">Cet espace est réservé aux directeurs. Saisissez le mot de passe direction : il sert à ouvrir les liens verrouillés envoyés par les animateurs.</p>
+      ${keyMismatch ? '<p class="alert">Le mot de passe enregistré sur ce téléphone ne correspond pas à celui de la structure. Saisissez-le à nouveau, exactement comme le premier directeur.</p>' : ''}
       ${pendingHash ? '<p class="alert">Un lien de suivi vous attend : il s’ouvrira dès que le mot de passe sera saisi.</p>' : ''}
       <label class="field"><span class="label">Mot de passe direction</span>
         <input type="password" id="pw" autocomplete="current-password" autocapitalize="off" enterkeyhint="go"></label>
@@ -558,7 +572,7 @@
     el.textContent = msg;
     el.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
+    toastTimer = setTimeout(() => el.classList.remove('show'), msg.length > 60 ? 7000 : 3200);
   }
 
   /* ---------- Actions ---------- */
